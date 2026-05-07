@@ -4,6 +4,10 @@ updates:
     directory: /
     schedule: { interval: weekly }
     open-pull-requests-limit: 5
+    ignore:
+      # Major bumps require deliberate review (often breaking).
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
     groups:
       type-defs:
         patterns: ['@types/*']
@@ -14,6 +18,9 @@ updates:
     directory: /packages/cli
     schedule: { interval: weekly }
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
     groups:
       anthropic-sdks:
         patterns: ['@anthropic-ai/*']
@@ -22,3 +29,6 @@ updates:
     directory: /
     schedule: { interval: weekly }
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
