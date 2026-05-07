@@ -26,20 +26,14 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24       # Node 24 ships with npm 11; trusted-publisher OIDC needs ≥11.5.1.
           cache: npm
           # Intentionally NO `registry-url` — that would write an .npmrc with
           # `_authToken=${NODE_AUTH_TOKEN}` which collides with npm's OIDC
           # trusted-publisher flow and causes a silent 404 on publish.
 
-      - name: Upgrade npm to ≥11.5.1 (required for trusted-publisher OIDC)
-        run: |
-          # Node 22 LTS ships with npm 10; trusted-publisher OIDC needs ≥11.5.1.
-          # `npm install -g npm@latest` self-upgrade is flaky (known bug); use
-          # corepack which is the supported way to switch Node's bundled tools.
-          corepack enable
-          corepack prepare npm@latest --activate
-          npm --version
+      - name: Show npm version
+        run: npm --version
 
       - run: npm ci
 
