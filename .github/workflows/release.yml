@@ -44,7 +44,11 @@ jobs:
           title: 'chore(release): version packages'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # No NPM_TOKEN — npm Trusted Publisher (configured at
+          # https://www.npmjs.com/package/compliancemaxx/access) mints a
+          # short-lived OIDC token at publish time. Provenance
+          # attestations are produced automatically because publishConfig
+          # in packages/cli/package.json sets `provenance: true`.
           NPM_CONFIG_PROVENANCE: 'true'
 
       - name: Move major-version Action tag (v1, v2, ...)

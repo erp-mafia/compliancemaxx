@@ -4,6 +4,10 @@ dist/
 .compliance-cache/
 .compliance-artifacts/
 
+# packages/cli/skills/ is a build artifact mirrored from packages/skills/
+# during prepublishOnly. The source of truth lives at packages/skills/.
+packages/cli/skills/
+
 # Generated when the orchestrator scans this very repo (self-audit):
 compliance.sarif
 compliance-comment.md

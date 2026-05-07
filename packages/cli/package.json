@@ -7,7 +7,7 @@
   "bugs": "https://github.com/erp-mafia/compliancemaxx/issues",
   "repository": {
     "type": "git",
-    "url": "https://github.com/erp-mafia/compliancemaxx.git",
+    "url": "git+https://github.com/erp-mafia/compliancemaxx.git",
     "directory": "packages/cli"
   },
   "keywords": [
@@ -27,7 +27,7 @@
   "main": "./dist/src/orchestrator.js",
   "types": "./dist/src/orchestrator.d.ts",
   "bin": {
-    "compliancemaxx": "./dist/bin/compliancemaxx.js"
+    "compliancemaxx": "dist/bin/compliancemaxx.js"
   },
   "files": [
     "dist",
@@ -55,7 +55,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "bundle:skills": "rm -rf skills && cp -R ../skills skills",
+    "clean": "rm -rf dist skills",
+    "prepack": "npm run clean && npm run build && npm run bundle:skills"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.29.0",
