@@ -35,7 +35,7 @@ jobs:
 
       - name: Configure AWS for LLM (when role available)
         if: vars.COMPLIANCE_BEDROCK_ROLE_ARN != ''
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.COMPLIANCE_BEDROCK_ROLE_ARN }}
           aws-region: ${{ vars.COMPLIANCE_AWS_REGION || 'eu-north-1' }}
