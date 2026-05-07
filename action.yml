@@ -72,16 +72,6 @@ runs:
       with:
         node-version: 22
 
-    - name: Install orchestrator
-      shell: bash
-      working-directory: ${{ github.action_path }}/packages/cli
-      run: |
-        if [ -f package-lock.json ]; then
-          npm ci --no-audit --no-fund
-        else
-          npm install --no-audit --no-fund
-        fi
-
     - name: Restore SBOM cache
       uses: actions/cache@v4
       with:
@@ -109,8 +99,17 @@ runs:
           ARGS+=(--no-llm)
         fi
 
-        node "${{ github.action_path }}/packages/cli/node_modules/.bin/tsx" \
-          "${{ github.action_path }}/packages/cli/bin/compliancemaxx.ts" "${ARGS[@]}"
+        # Pin to the same release that owns this action.yml (the major-tag
+        # ref the consumer used). On `@v1`, GITHUB_ACTION_REF == "v1" — npx
+        # resolves the latest 1.x. On `@main` it falls back to "latest".
+        REF="${GITHUB_ACTION_REF:-latest}"
+        case "$REF" in
+          v[0-9]*) PKG_SPEC="compliancemaxx@$REF" ;;
+          *)       PKG_SPEC="compliancemaxx@latest" ;;
+        esac
+        echo "Using $PKG_SPEC"
+
+        npx -y "$PKG_SPEC" "${ARGS[@]}"
         EXIT=$?
 
         echo "exit-code=$EXIT" >> "$GITHUB_OUTPUT"
