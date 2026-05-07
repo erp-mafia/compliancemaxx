@@ -1,6 +1,6 @@
 {
   "name": "compliancemaxx",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Multi-framework compliance orchestrator (OSS-license, OWASP ASVS, ISO 27001, SOC 2, GDPR) for repo and CI/CD.",
   "license": "Apache-2.0",
   "homepage": "https://github.com/erp-mafia/compliancemaxx#readme",
