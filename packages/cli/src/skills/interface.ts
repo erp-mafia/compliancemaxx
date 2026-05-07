@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -288,7 +289,6 @@ function extractStructuredFindings(
 }
 
 function makeId(f: Finding): string {
-  const { createHash } = require('node:crypto') as typeof import('node:crypto');
   return createHash('sha256')
     .update([f.framework, f.control_ref, f.rule_id, f.source_tool, f.location.file, String(f.location.line ?? '')].join('|'))
     .digest('hex')

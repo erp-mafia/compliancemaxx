@@ -71,14 +71,18 @@ static_scan:
     pr_mode_enabled: true
     failure_action: warn
 
+  # Helsinki GDPR Scanner (consent banner / pre-consent script detection)
+  # has no public Docker image. To enable, build it locally and override
+  # `image:` here, OR run it as a separate CI step against a deployed URL.
+  # Disabled by default so swarm-mode runs cleanly.
   - id: helsinki-frontend
     tool: docker
     image: stonehenge/gdpr-scanner:latest
     args: ["--url", "${COMPLIANCE_TARGET_URL}", "--format", "json", "--output", "${OUT}"]
     parser: helsinki
     timeout_seconds: 300
-    pr_mode_enabled: false       # requires deployed front-end; swarm-only
-    swarm_mode_enabled: true
+    pr_mode_enabled: false
+    swarm_mode_enabled: false
     failure_action: warn
 
 deep_audit:

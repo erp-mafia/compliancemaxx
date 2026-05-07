@@ -73,14 +73,17 @@ static_scan:
     timeout_seconds: 240
     pr_mode_enabled: true
 
+  # CodeQL is not distributed as a public Docker image. To use it,
+  # consumers should add github/codeql-action steps to their CI directly.
+  # Disabled here so swarm-mode runs cleanly out-of-the-box.
   - id: codeql
     tool: docker
     image: ghcr.io/github/codeql-action/codeql-cli:latest
     args: ["database", "analyze", "--format=sarif-latest", "--output=${OUT}", "${ARTIFACT_DIR}/codeql-db"]
     parser: sarif
     timeout_seconds: 1200
-    pr_mode_enabled: false       # too slow on PR; ship as scheduled gate
-    swarm_mode_enabled: true
+    pr_mode_enabled: false
+    swarm_mode_enabled: false
     failure_action: warn
 
 deep_audit:

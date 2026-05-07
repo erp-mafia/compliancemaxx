@@ -39,7 +39,7 @@ consumes: []
 static_scan:
   - id: scancode
     tool: docker
-    image: ghcr.io/aboutcode-org/scancode-toolkit:latest
+    image: aboutcode/scancode-toolkit:latest
     args:
       - "scancode"
       - "--license"
