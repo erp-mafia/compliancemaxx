@@ -32,6 +32,9 @@ jobs:
           # `_authToken=${NODE_AUTH_TOKEN}` which collides with npm's OIDC
           # trusted-publisher flow and causes a silent 404 on publish.
 
+      - name: Upgrade npm to ≥11.5.1 (required for trusted-publisher OIDC)
+        run: npm install -g npm@latest
+
       - run: npm ci
 
       - run: npm run build
