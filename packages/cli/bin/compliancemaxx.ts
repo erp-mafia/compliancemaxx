@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 import { resolve } from 'node:path';
 import { discoverSkills, loadOrchestratorRoot } from '../src/skills/loader.js';
-import { run } from '../src/orchestrator.js';
+import { run, type Mode, type LegacyMode } from '../src/orchestrator.js';
 import { loadConfig } from '../src/config/loader.js';
 import { createLLMClient } from '../src/llm/client.js';
 import { createLogger } from '../src/util/log.js';
 
 const log = createLogger('cli');
 
+const VALID_MODES: ReadonlySet<string> = new Set(['review', 'scan', 'audit', 'pr', 'swarm']);
+const DEFAULT_MODE: Mode = 'review';
+
 interface CliArgs {
   command: 'run' | 'validate-config' | 'sbom' | 'explain' | 'list-skills' | 'help';
-  mode?: 'pr' | 'swarm';
+  mode?: Mode | LegacyMode;
   base?: string;
   skill?: string;
   noLlm?: boolean;
@@ -40,8 +43,10 @@ function parseArgs(argv: string[]): CliArgs {
     const a = rest[i];
     const next = rest[i + 1];
     if (a === '--mode' && next) {
-      if (next !== 'pr' && next !== 'swarm') throw new Error(`--mode must be 'pr' or 'swarm'`);
-      args.mode = next;
+      if (!VALID_MODES.has(next)) {
+        throw new Error(`--mode must be one of: review | scan | audit (or legacy pr | swarm)`);
+      }
+      args.mode = next as Mode | LegacyMode;
       i++;
     } else if (a === '--base' && next) {
       args.base = next;
@@ -66,13 +71,22 @@ Usage:
   compliancemaxx <command> [flags]
 
 Commands:
-  run --mode pr|swarm [--base <sha>] [--skill <id>] [--no-llm] [--config <path>]
-                          Execute scans against the current working directory.
-  list-skills             Discover and print all loaded skill manifests.
-  validate-config         JSON-schema check of .compliance/config.yml + suppression expiry.
-  sbom                    Produce SBOM only via the oss-license-compliance skill.
+  run [--mode review|scan|audit] [--base <sha>] [--skill <id>] [--no-llm] [--config <path>]
+                          Execute against the current working directory.
+                          Default mode: review (LLM-only, diff-focused, no Docker).
+
+  list-skills             Discover and print all loaded skills.
+  validate-config         Sanity-check .compliance/config.yml + suppression expiry.
+  sbom                    Produce SBOM only via the oss-license skill.
   explain <findingId>     Show the cross-framework mapping path for a finding.
   help                    Show this message.
+
+Modes:
+  review   LLM-only review of the PR diff (~90s, ~$0.05). No scanners.
+  scan     Deterministic scanners only (Trivy/Semgrep/Checkov/Gitleaks/etc.). $0.
+  audit    Both: scanners + LLM agentic deep-audit, full repo (~10min, ~$0.20).
+  pr       Deprecated alias for 'scan'.
+  swarm    Deprecated alias for 'audit'.
 
 Exit codes:
   0  clean run
@@ -81,9 +95,10 @@ Exit codes:
 
 Environment:
   COMPLIANCE_SWARM_ROOT   Override orchestrator package location.
+  COMPLIANCE_SKILLS_ROOT  Override skills lookup directory.
   COMPLIANCE_LOG_LEVEL    debug|info|warn|error (default info).
   ANTHROPIC_API_KEY       For Anthropic LLM adapter.
-  AWS_REGION              For Bedrock LLM adapter (resolves credentials via standard chain).
+  AWS_REGION              For Bedrock LLM adapter.
 `);
 }
 
@@ -91,47 +106,53 @@ async function listSkills(): Promise<void> {
   const root = await loadOrchestratorRoot();
   const skills = await discoverSkills(root);
   if (skills.length === 0) {
-    log.warn('no skill manifests found', { searched: root });
+    log.warn('no skills found', { searched: root });
     return;
   }
-  process.stdout.write(`Loaded ${skills.length} skill manifest(s):\n\n`);
+  process.stdout.write(`Loaded ${skills.length} skill(s):\n\n`);
   for (const s of skills) {
-    process.stdout.write(`  ${s.manifest.id}@${s.manifest.version}\n`);
+    const kind = s.manifestPath ? 'full (manifest)' : 'review-only (SKILL.md)';
+    process.stdout.write(`  ${s.manifest.id}@${s.manifest.version}  [${kind}]\n`);
     process.stdout.write(`    framework:    ${s.manifest.finding_extraction.framework}\n`);
-    process.stdout.write(`    static_scan:  ${s.manifest.static_scan.length} step(s)\n`);
-    process.stdout.write(`    deep_audit:   ${s.manifest.deep_audit.length} step(s)\n`);
+    if (s.manifest.static_scan.length > 0) {
+      process.stdout.write(`    static_scan:  ${s.manifest.static_scan.length} step(s)\n`);
+    }
+    if (s.manifest.deep_audit.length > 0) {
+      process.stdout.write(`    deep_audit:   ${s.manifest.deep_audit.length} step(s)\n`);
+    }
     if (s.manifest.produces.length > 0) {
-      const produced = s.manifest.produces.map((p) => p.name).join(', ');
-      process.stdout.write(`    produces:     ${produced}\n`);
+      process.stdout.write(`    produces:     ${s.manifest.produces.map((p) => p.name).join(', ')}\n`);
     }
     if (s.manifest.consumes.length > 0) {
       process.stdout.write(`    consumes:     ${s.manifest.consumes.join(', ')}\n`);
     }
-    process.stdout.write(`    path:         ${s.manifestPath}\n\n`);
+    process.stdout.write(`    path:         ${s.manifestPath ?? s.skillMdPath ?? s.rootDir}\n\n`);
   }
 }
 
+function modeWantsLLM(mode: Mode | LegacyMode): boolean {
+  // review and audit/swarm use LLM; scan/pr don't.
+  return mode === 'review' || mode === 'audit' || mode === 'swarm';
+}
+
 async function runCommand(args: CliArgs): Promise<number> {
-  if (!args.mode) {
-    log.error("'run' requires --mode pr|swarm");
-    return 2;
-  }
+  const mode = args.mode ?? DEFAULT_MODE;
   const repoRoot = resolve(process.cwd());
   const config = await loadConfig(repoRoot, args.configPath);
 
   let llm;
-  if (args.mode === 'swarm' && !args.noLlm) {
+  if (modeWantsLLM(mode) && !args.noLlm) {
     try {
       llm = await createLLMClient({ provider: config.llm_provider, model: config.llm_model });
     } catch (err) {
-      log.warn('LLM unavailable; deep_audit will be skipped', {
+      log.warn('LLM unavailable; LLM-driven checks will be skipped', {
         error: err instanceof Error ? err.message : String(err),
       });
     }
   }
 
   const result = await run({
-    mode: args.mode,
+    mode,
     repoRoot,
     ...(args.base !== undefined && { baseRef: args.base }),
     ...(args.configPath !== undefined && { configPath: args.configPath }),
@@ -141,6 +162,7 @@ async function runCommand(args: CliArgs): Promise<number> {
   });
 
   log.info('run complete', {
+    mode,
     exit: result.exitCode,
     findings: result.findings.length,
     expired: result.expiredSuppressions.length,
@@ -188,7 +210,7 @@ async function main(): Promise<number> {
     case 'validate-config':
       return validateConfigCommand(args);
     case 'sbom':
-      return runCommand({ ...args, mode: 'pr', skill: 'oss-license-compliance' });
+      return runCommand({ ...args, mode: 'scan', skill: 'oss-license-compliance' });
     case 'explain':
       log.warn(`'explain' is not yet implemented in this build`);
       return 2;

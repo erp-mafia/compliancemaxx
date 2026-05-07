@@ -4,6 +4,7 @@ import { loadConfig } from './config/loader.js';
 import type { SwarmConfig } from './config/schema.js';
 import { discoverSkills, loadOrchestratorRoot } from './skills/loader.js';
 import { ManifestSkillAdapter, type LLMClient, type RepoContext, type SkillAdapter } from './skills/interface.js';
+import { runReviewMode } from './skills/review.js';
 import type { Finding } from './findings/schema.js';
 import { meetsThreshold } from './findings/schema.js';
 import { dedup } from './findings/dedup.js';
@@ -17,14 +18,36 @@ import { createLogger } from './util/log.js';
 
 const log = createLogger('orchestrator');
 
+/**
+ * Public mode names. v2 uses `review`/`scan`/`audit`; the legacy `pr`/`swarm`
+ * names remain accepted for backwards compat and are normalised at the entry.
+ */
+export type Mode = 'review' | 'scan' | 'audit';
+export type LegacyMode = 'pr' | 'swarm';
+
+const MODE_ALIASES: Record<LegacyMode, Mode> = {
+  pr: 'scan',
+  swarm: 'audit',
+};
+
+export function normaliseMode(input: string): Mode {
+  if (input in MODE_ALIASES) {
+    const aliased = MODE_ALIASES[input as LegacyMode];
+    log.warn(`mode '${input}' is deprecated; use '${aliased}' instead`);
+    return aliased;
+  }
+  if (input === 'review' || input === 'scan' || input === 'audit') return input;
+  throw new Error(`Unknown mode '${input}'. Valid: review | scan | audit (or legacy pr | swarm).`);
+}
+
 export interface RunOptions {
-  mode: 'pr' | 'swarm';
+  mode: Mode | LegacyMode;
   repoRoot: string;
   baseRef?: string;
   configPath?: string;
   /** Restrict to a single skill id; runs only that skill (no graph). */
   onlySkillId?: string;
-  /** Skip LLM deep_audit even in swarm mode (offline / dry-run). */
+  /** Skip LLM calls even in modes that would normally use them. */
   noLlm?: boolean;
   llm?: LLMClient;
 }
@@ -40,6 +63,8 @@ export interface RunResult {
 }
 
 export async function run(opts: RunOptions): Promise<RunResult> {
+  const mode: Mode = normaliseMode(opts.mode);
+
   const config = await loadConfig(opts.repoRoot, opts.configPath);
   const orchestratorRoot = await loadOrchestratorRoot();
   const skills = await discoverSkills(orchestratorRoot);
@@ -50,7 +75,7 @@ export async function run(opts: RunOptions): Promise<RunResult> {
 
   if (enabled.length === 0) {
     log.warn('no enabled skills found — nothing to run');
-    return finalize(config, opts, [], [], 0, [], [], 0);
+    return finalize(config, opts, mode, [], [], 0, [], [], 0);
   }
 
   const artifactDir = resolve(opts.repoRoot, config.artifact_dir);
@@ -63,10 +88,24 @@ export async function run(opts: RunOptions): Promise<RunResult> {
     artifactDir,
     changedFiles: changed,
     ...(opts.baseRef !== undefined && { baseRef: opts.baseRef }),
-    mode: opts.mode,
-    defaultBlocking: opts.mode === 'pr',
+    // RepoContext.mode is still the legacy enum (pr|swarm) used by the existing
+    // ManifestSkillAdapter — `review` doesn't go through that path so it's safe
+    // to flatten review→pr here for the few places ctx.mode is read.
+    mode: mode === 'audit' ? 'swarm' : 'pr',
+    defaultBlocking: mode !== 'audit',
     artifacts: new Map(),
   };
+
+  // -------- review mode: LLM-only, diff-focused. Skip scanners entirely. -------
+  if (mode === 'review') {
+    if (!opts.llm) {
+      log.warn('review mode requires an LLM client; nothing to run');
+      return finalize(config, opts, mode, [], [], 0, [], [], 0);
+    }
+    const findings = await runReviewMode(enabled, ctx, opts.llm);
+    return processAndEmit(config, opts, mode, findings, [], []);
+  }
+  // ------------------------------------------------------------------------------
 
   const adapters = enabled.map((s) => new ManifestSkillAdapter(s));
   const errors: Array<{ skill: string; message: string }> = [];
@@ -99,7 +138,7 @@ export async function run(opts: RunOptions): Promise<RunResult> {
       }
       const findings = await c.staticScan(ctx);
       let deep: Finding[] = [];
-      if (opts.mode === 'swarm' && !opts.noLlm && opts.llm) {
+      if (mode === 'audit' && !opts.noLlm && opts.llm) {
         deep = await c.deepAudit(ctx, opts.llm);
       }
       return { id: c.id, findings: [...findings, ...deep] };
@@ -116,8 +155,8 @@ export async function run(opts: RunOptions): Promise<RunResult> {
     }
   }
 
-  // Step 4: Producer also gets a deep_audit pass in swarm mode.
-  if (producer && opts.mode === 'swarm' && !opts.noLlm && opts.llm) {
+  // Step 4: Producer also gets a deep_audit pass in audit mode.
+  if (producer && mode === 'audit' && !opts.noLlm && opts.llm) {
     try {
       const deep = await producer.deepAudit(ctx, opts.llm);
       allFindings.push(...deep);
@@ -126,9 +165,23 @@ export async function run(opts: RunOptions): Promise<RunResult> {
     }
   }
 
-  // Step 5: dedup → suppress → threshold → emit.
-  const merged = dedup(allFindings);
-  const suppressionResult = applySuppressions(merged as unknown as Finding[], config.suppressions);
+  return processAndEmit(config, opts, mode, allFindings, skillsExecuted, errors);
+}
+
+async function processAndEmit(
+  config: SwarmConfig,
+  opts: RunOptions,
+  mode: Mode,
+  rawFindings: Finding[],
+  skillsExecuted: string[],
+  errors: Array<{ skill: string; message: string }>,
+): Promise<RunResult> {
+  // dedup → suppress → threshold → emit.
+  const merged = dedup(rawFindings);
+  const suppressionResult = applySuppressions(
+    merged as unknown as Finding[],
+    config.suppressions,
+  );
 
   // Apply severity threshold to determine `blocking`.
   const thresholded = suppressionResult.findings.map((f) => {
@@ -144,6 +197,7 @@ export async function run(opts: RunOptions): Promise<RunResult> {
   return finalize(
     config,
     opts,
+    mode,
     thresholded,
     suppressionResult.expired,
     suppressionResult.applied_count,
@@ -182,6 +236,7 @@ async function runSkillWithCache(
 async function finalize(
   config: SwarmConfig,
   opts: RunOptions,
+  mode: Mode,
   findings: Finding[],
   expired: SuppressionRule[],
   applied: number,
@@ -189,17 +244,21 @@ async function finalize(
   errors: Array<{ skill: string; message: string }>,
   exitCode: 0 | 1 | 2,
 ): Promise<RunResult> {
-  const sarifPath = resolve(opts.repoRoot, config.sarif_path);
-  const mdPath = resolve(opts.repoRoot, config.pr_comment_path);
-  const dossierPath = resolve(opts.repoRoot, config.dossier_path);
+  void opts;
+  const repoRoot = opts.repoRoot;
+  const sarifPath = resolve(repoRoot, config.sarif_path);
+  const mdPath = resolve(repoRoot, config.pr_comment_path);
+  const dossierPath = resolve(repoRoot, config.dossier_path);
 
-  const sarif = toSarif(findings);
+  // SARIF is only useful when scanners ran (file/line precision); skip in
+  // review mode where findings often lack physical locations.
+  const sarif = mode === 'review' ? toSarif([]) : toSarif(findings);
   const md = toMarkdown(findings, {
-    mode: opts.mode,
+    mode: mode === 'audit' ? 'swarm' : mode === 'scan' ? 'pr' : 'pr',
     expiredSuppressionCount: expired.length,
   });
   const dossier = toDossier({
-    mode: opts.mode,
+    mode: mode === 'audit' ? 'swarm' : 'pr',
     exit_code: exitCode,
     findings,
     expired_suppressions: expired,

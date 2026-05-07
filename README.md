@@ -11,7 +11,7 @@ leak reported four times.
 
 ## Quickstart — 30 seconds
 
-Drop this into `.github/workflows/compliance-pr.yml`:
+Drop this into `.github/workflows/compliance.yml`:
 
 ```yaml
 name: compliance
@@ -22,7 +22,6 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  security-events: write
 
 jobs:
   compliance:
@@ -30,26 +29,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: erp-mafia/compliancemaxx@v1
-        with:
-          mode: pr
-          base: ${{ github.event.pull_request.base.sha }}
+      - uses: erp-mafia/compliancemaxx@v2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: eu-north-1
 ```
 
-Open a PR. You get:
+Open a PR. Within 90 seconds you get a sticky comment with reasoned compliance
+findings across all five frameworks. No `mode:` to choose, no config file, no
+Docker. The default `review` mode reads the PR diff, sends it to Claude with
+the bundled skill knowledge, and posts structured findings.
 
-- **SARIF annotations** on changed lines, native to GitHub Code Scanning.
-- A **sticky markdown comment** with the finding summary.
-- A **JSON dossier** as a workflow artifact.
+Want native scanners (Trivy/Semgrep/Checkov/Gitleaks) too? Add `mode: audit`
+to also run them. Want only scanners (no LLM cost)? `mode: scan`.
 
-That's it. No config file, no secrets, no Bedrock setup needed for PR mode.
+## Three modes
 
-## Two modes
-
-| Mode  | Trigger                       | Budget   | Includes                           | Needs            |
-|-------|-------------------------------|----------|------------------------------------|------------------|
-| `pr`  | every pull request            | < 5 min  | deterministic scanners only        | nothing          |
-| `swarm` | nightly + dispatch + label  | ≤ 60 min | scanners **plus** LLM deep audit   | Bedrock or Anthropic API |
+| Mode | Speed | Cost | LLM | Docker scanners | Output |
+|---|---|---|---|---|---|
+| `review` (default) | ~90s | ~$0.05 | ✅ | ❌ | sticky PR comment + JSON dossier |
+| `scan` | <5min | $0 | ❌ | ✅ | + SARIF annotations on changed lines |
+| `audit` | ~10min | ~$0.20 | ✅ | ✅ | full report; nightly cron |
 
 ## What you'll see
 
@@ -101,12 +102,12 @@ See [docs/configuration.md](./docs/configuration.md) for the full reference.
 
 | Input               | Default            | Description                                                       |
 |---------------------|--------------------|-------------------------------------------------------------------|
-| `mode`              | `pr`               | `pr` or `swarm`.                                                  |
+| `mode`              | `review`           | `review` \| `scan` \| `audit` (or legacy `pr` \| `swarm`)         |
 | `base`              | PR base SHA        | Diff base for changed-files.                                      |
-| `config-path`       | `.compliance/config.yml` | Override config location.                                   |
-| `no-llm`            | `false`            | Skip deep_audit (always true in `pr` mode).                       |
+| `config-path`       | `.compliance/config.yml` | Override config location. Optional — defaults are sensible. |
+| `no-llm`            | `false`            | Skip LLM calls even in modes that use them.                       |
 | `llm-provider`      | `bedrock`          | `bedrock` or `anthropic`.                                         |
-| `upload-sarif`      | `true`             | Push SARIF to Code Scanning.                                      |
+| `upload-sarif`      | `true`             | Push SARIF to Code Scanning (skipped in `review` mode).           |
 | `upload-dossier`    | `true`             | Archive JSON dossier as artifact.                                 |
 | `post-comment`      | `true`             | Sticky PR comment.                                                |
 | `fail-on-findings`  | `true`             | Exit non-zero on blocking findings.                               |
@@ -118,7 +119,21 @@ See [docs/configuration.md](./docs/configuration.md) for the full reference.
 |--------------|--------------------------------------------------------------------------------------|
 | GitLab CI    | [`examples/gitlab/.gitlab-ci.yml`](./examples/gitlab/.gitlab-ci.yml)                 |
 | pre-commit   | [`examples/pre-commit/`](./examples/pre-commit/.pre-commit-config.yaml)              |
-| Local CLI    | `npm i -g compliancemaxx && compliancemaxx run --mode pr`                        |
+| Local CLI    | `npm i -g compliancemaxx && compliancemaxx run` (review mode by default)             |
+
+## v1 → v2 migration
+
+If you were using v1 (`uses: erp-mafia/compliancemaxx@v1`):
+
+| v1                  | v2 equivalent       | Why change                              |
+|---------------------|---------------------|-----------------------------------------|
+| `mode: pr` (was required) | `mode: scan`  | More accurate name; `pr` still works as a deprecated alias |
+| `mode: swarm`       | `mode: audit`       | More accurate name; `swarm` still works as a deprecated alias |
+| (no mode existed)   | `mode: review` (default) | NEW: lightweight LLM-only diff review |
+
+Just bumping `@v1` → `@v2` with no other changes will switch you from
+deterministic-only PR scans to LLM-only diff review — the lightest possible
+mode, perfect for trying first. Add `mode: scan` to keep v1 behavior.
 
 ## Architecture
 

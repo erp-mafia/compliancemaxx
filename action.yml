@@ -7,23 +7,27 @@ branding:
 
 inputs:
   mode:
-    description: 'pr | swarm — PR is fast deterministic; swarm adds LLM deep audit.'
-    required: true
-    default: 'pr'
+    description: |
+      review (default) — LLM-only diff review, no scanners, no Docker. ~90s.
+      scan             — deterministic scanners only (Trivy/Semgrep/Checkov/Gitleaks/etc). $0, no LLM.
+      audit            — both scanners + LLM agentic deep-audit, full repo. ~10min.
+      pr / swarm       — deprecated aliases for scan / audit.
+    required: false
+    default: 'review'
   base:
-    description: 'Base SHA to diff against (PR-mode only). Defaults to PR base on pull_request events.'
+    description: 'Base SHA to diff against. Defaults to PR base on pull_request events.'
     required: false
     default: ''
   config-path:
-    description: 'Path to .compliance/config.yml (relative to repo root).'
+    description: 'Path to .compliance/config.yml (relative to repo root). Optional — sensible defaults apply if absent.'
     required: false
     default: '.compliance/config.yml'
   no-llm:
-    description: 'Skip LLM deep_audit even in swarm mode.'
+    description: 'Skip LLM calls even in modes that use them (review, audit).'
     required: false
     default: 'false'
   llm-provider:
-    description: 'LLM provider for swarm-mode deep audits: bedrock | anthropic.'
+    description: 'LLM provider: bedrock | anthropic.'
     required: false
     default: 'bedrock'
   upload-sarif:
@@ -95,9 +99,12 @@ runs:
         elif [ "${{ github.event_name }}" = "pull_request" ]; then
           ARGS+=(--base "${{ github.event.pull_request.base.sha }}")
         fi
-        if [ "${{ inputs.no-llm }}" = "true" ] || [ "${{ inputs.mode }}" = "pr" ]; then
-          ARGS+=(--no-llm)
-        fi
+        # Only `scan` (and legacy `pr`) skip the LLM by default. review/audit
+        # use it. Pass --no-llm if explicitly requested OR if mode is scan/pr.
+        case "${{ inputs.mode }}" in
+          scan|pr) ARGS+=(--no-llm) ;;
+          *) [ "${{ inputs.no-llm }}" = "true" ] && ARGS+=(--no-llm) ;;
+        esac
 
         # Pin to the same release that owns this action.yml (the major-tag
         # ref the consumer used). On `@v1`, GITHUB_ACTION_REF == "v1" — npx
