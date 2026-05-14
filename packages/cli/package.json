@@ -61,7 +61,7 @@
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.29.0",
-    "@anthropic-ai/sdk": "^0.95.0",
+    "@anthropic-ai/sdk": "^0.96.0",
     "fast-glob": "^3.3.2",
     "minimatch": "^10.0.0",
     "yaml": "^2.6.0",
